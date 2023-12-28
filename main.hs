@@ -4,6 +4,7 @@
 import Data.List (intercalate, sortBy)
 import Data.Ord (comparing)
 import Debug.Trace (trace)
+import Data.Char (isSpace, isDigit, isLower)
 
 -- Part 1
 
@@ -72,7 +73,8 @@ loop c1 c2 stack =
 
 run :: (Code, Stack, State) -> (Code, Stack, State)
 run ([], stack, state) = ([], stack, state)
-run ((inst:rest), stack, state) =
+run (inst:rest, stack, state) =
+    trace ("Running instruction: " ++ show inst) $
     case inst of
     Push n -> run (rest, Left n : stack, state)
     Add    -> run (rest, arithmeticOp (+) stack, state)
@@ -102,7 +104,8 @@ run ((inst:rest), stack, state) =
             (Right True : xs) -> run (c1 ++ rest, xs, state)
             (Right False : xs) -> run (c2 ++ rest, xs, state)
             _ -> error "Run-time error: Invalid condition in Branch"
-    Loop c1 c2 -> run (c1 ++ [Branch (c2 ++ [Loop c1 c2]) [Noop]] ++ rest, stack, state)
+    Loop c1 c2 -> trace ("Looping with c1: " ++ show c1 ++ ", c2: " ++ show c2) $  -- Add this line for logging
+                 run (c1 ++ [Branch (c2 ++ [Loop c1 c2]) [Noop]] ++ rest, stack, state)
 
 
 -- Updated pop function with proper error handling
@@ -115,32 +118,170 @@ testAssembler :: Code -> (String, String)
 testAssembler code = (stack2Str stack, state2Str state)
   where (_, stack, state) = run(code, createEmptyStack, createEmptyState)
 
+-- PFL 2023/24 - Haskell practical assignment Part 2
+-- Updated on 15/12/2023
+
+-- Part 2
+
+
+
+-- Define the types Aexp, Bexp, Stm, and Program
+data Aexp = Const Integer | Var String | AddExp Aexp Aexp | SubExp Aexp Aexp | MultExp Aexp Aexp
+          deriving Show
+
+data Bexp = TrueConst | FalseConst | EqualExp Aexp Aexp | LessEqExp Aexp Aexp | NotExp Bexp | AndExp Bexp Bexp
+          deriving Show
+data Stm = Assign String Aexp | Sequence [Stm] | If Bexp Stm Stm | While Bexp Stm
+         deriving Show
+
+-- compA :: Aexp -> Code
+compA :: Aexp -> Code
+compA (Const n) = [Push n]
+compA (Var x)   = [Fetch x]
+compA (AddExp a1 a2) = compA a1 ++ compA a2 ++ [Add]
+compA (SubExp a1 a2) = compA a1 ++ compA a2 ++ [Sub]
+compA (MultExp a1 a2) = compA a1 ++ compA a2 ++ [Mult]
+
+-- compB :: Bexp -> Code
+compB :: Bexp -> Code
+compB TrueConst = [Tru]
+compB FalseConst = [Fals]
+compB (EqualExp a1 a2) = compA a1 ++ compA a2 ++ [Equ]
+compB (LessEqExp a1 a2) = compA a1 ++ compA a2 ++ [Le]
+compB (NotExp b) = compB b ++ [Neg]
+compB (AndExp b1 b2) = compB b1 ++ compB b2 ++ [And]
+
+
+-- compile :: Program -> Code
+compile :: [Stm] -> Code
+compile [] = []
+compile (s:stms) = compileStm s ++ compile stms
+  where
+    compileStm (Assign x a) = compA a ++ [Store x]
+    compileStm (Sequence stmList) = concatMap compileStm stmList
+    compileStm (If b t f) = compB b ++ [Branch (compile [t]) (compile [f])]
+    compileStm (While b body) = let loopBody = compile [body] ++ compB b
+                                in [Loop loopBody [Noop]]
+
+-- Lexer and Parser Implementation
+lexer :: String -> [String]
+lexer [] = []
+lexer (c:cs)
+  | isSpace c = lexer cs
+  | isDigit c = numToken : lexer restNum
+  | isLower c = varToken : lexer restVar
+  | otherwise = [c] : lexer cs
+  where
+    (numToken, restNum) = span isDigit (c:cs)
+    (varToken, restVar) = span isLower (c:cs)
+
+parse :: String -> [Stm]
+parse str = parseStms (lexer str)
+
+-- Parser for Arithmetic Expressions
+parseAexp :: [String] -> (Aexp, [String])
+parseAexp tokens = 
+  let (term, rest) = parseTerm tokens
+  in case rest of
+       ("+":rest') -> let (aexp, rest'') = parseAexp rest' in (AddExp term aexp, rest'')
+       ("-":rest') -> let (aexp, rest'') = parseAexp rest' in (SubExp term aexp, rest'')
+       _ -> (term, rest)
+
+-- Parser for Terms in Arithmetic Expressions
+parseTerm :: [String] -> (Aexp, [String])
+parseTerm tokens = 
+  let (factor, rest) = parseFactor tokens
+  in case rest of
+       ("*":rest') -> let (term, rest'') = parseTerm rest' in (MultExp factor term, rest'')
+       _ -> (factor, rest)
+
+-- Parser for Factors in Arithmetic Expressions
+parseFactor :: [String] -> (Aexp, [String])
+parseFactor ("(":tokens) = 
+  let (aexp, ")":rest) = parseAexp tokens
+  in (aexp, rest)
+parseFactor (t:tokens)
+  | all isDigit t = (Const (read t), tokens)
+  | otherwise = (Var t, tokens)
+
+-- Parser for Boolean Expressions
+parseBexp :: [String] -> (Bexp, [String])
+parseBexp ("not":tokens) = 
+  let (bexp, rest) = parseBexp tokens
+  in (NotExp bexp, rest)
+parseBexp tokens = 
+  let (relation, rest) = parseRelation tokens
+  in case rest of
+       ("and":rest') -> let (bexp, rest'') = parseBexp rest' in (AndExp relation bexp, rest'')
+       _ -> (relation, rest)
+
+-- Parser for Relations in Boolean Expressions
+parseRelation :: [String] -> (Bexp, [String])
+parseRelation tokens =
+  let (a1, op:rest) = parseAexp tokens
+      (a2, rest') = parseAexp rest
+  in case op of
+       "<=" -> (LessEqExp a1 a2, rest')
+       "==" -> (EqualExp a1 a2, rest')
+       "="  -> let (b1, rest'') = parseBexp rest' 
+                   b1Val = case b1 of
+                             TrueConst -> 1
+                             _         -> 0
+               in (EqualExp (Const b1Val) a2, rest'')
+       _    -> error "Parse error in parseRelation"
+
+-- Parser for Statements
+parseStm :: [String] -> (Stm, [String])
+parseStm ("if":tokens) = 
+  let (bexp, "then":rest) = parseBexp tokens
+      (thenStm, "else":rest') = parseStm rest
+      (elseStm, rest'') = parseStm rest'
+  in (If bexp thenStm elseStm, rest'')
+parseStm ("while":tokens) = 
+  let (bexp, "do":rest) = parseBexp tokens
+      (body, rest') = parseStm rest
+  in (While bexp body, rest')
+parseStm (var:":=":tokens) =
+  let (aexp, ";":rest) = parseAexp tokens
+  in (Assign var aexp, rest)
+parseStm tokens = 
+  let (stm, rest) = parseSimpleStm tokens
+  in case rest of
+       ";":rest' -> let (stm', rest'') = parseStm rest' in (Sequence [stm, stm'], rest'')
+       _ -> (stm, rest)
+
+-- Parser for Simple Statements (no control structures)
+parseSimpleStm :: [String] -> (Stm, [String])
+parseSimpleStm tokens = 
+  let (stm, rest) = parseStm tokens
+  in (stm, rest)
+
+-- Parsing a sequence of statements
+parseStms :: [String] -> [Stm]
+parseStms [] = []
+parseStms tokens = 
+  let (stm, rest) = parseStm tokens
+  in stm : parseStms rest
+
+-- To help you test your parser
+testParser :: String -> (String, String)
+testParser programCode = (stack2Str stack, state2Str state)
+  where (_,stack,state) = run(compile (parse programCode), createEmptyStack, createEmptyState)
+
 main :: IO ()
 main = do
-  -- Example test case
-  print $ testAssembler [Push 10, Push 4, Push 3, Sub, Mult] == ("-10","")
-  print $ testAssembler [Fals, Push 3, Tru, Store "var", Store "a", Store "someVar"] == ("","a=3,someVar=False,var=True")
-  print $ testAssembler [Fals, Store "var", Fetch "var"] == ("False","var=False")
-  print $ testAssembler [Push (-20), Tru, Fals] == ("False,True,-20","")
-  print $ testAssembler [Push (-20), Tru, Tru, Neg] == ("False,True,-20","")
-  print $ testAssembler [Push (-20), Tru, Tru, Neg, Equ] == ("False,-20","")
-  print $ testAssembler [Push (-20), Push (-21), Le] == ("True","")
-  print $ testAssembler [Push 5, Store "x", Push 1, Fetch "x", Sub, Store "x"] == ("","x=4")
-  print $ testAssembler [Push 10, Store "i", Push 1, Store "fact", Loop [Push 1, Fetch "i", Equ, Neg] [Fetch "i", Fetch "fact", Mult, Store "fact", Push 1, Fetch "i", Sub, Store "i"]] == ("","fact=3628800,i=1")
-  print $ testAssembler [Tru,Tru,Store "y", Fetch "x",Tru] 
+  print $ testParser "x := 5; x := x - 1;" == ("","x=4")
+
 -- Examples:
--- -- testAssembler [Push 10,Push 4,Push 3,Sub,Mult] == ("-10","")
--- testAssembler [Fals,Push 3,Tru,Store "var",Store "a", Store "someVar"] == ("","a=3,someVar=False,var=True")
--- testAssembler [Fals,Store "var",Fetch "var"] == ("False","var=False")
--- testAssembler [Push (-20),Tru,Fals] == ("False,True,-20","")
--- testAssembler [Push (-20),Tru,Tru,Neg] == ("False,True,-20","")
--- testAssembler [Push (-20),Tru,Tru,Neg,Equ] == ("False,-20","")
--- -- testAssembler [Push (-20),Push (-21), Le] == ("True","")
--- -- testAssembler [Push 5,Store "x",Push 1,Fetch "x",Sub,Store "x"] == ("","x=4")
--- ?? testAssembler [Push 10,Store "i",Push 1,Store "fact",Loop [Push 1,Fetch "i",Equ,Neg] [Fetch "i",Fetch "fact",Mult,Store "fact",Push 1,Fetch "i",Sub,Store "i"]] == ("","fact=3628800,i=1")
--- If you test:
--- testAssembler [Push 1,Push 2,And]
--- You should get an exception with the string: "Run-time error"
--- If you test:
--- testAssembler [Tru,Tru,Store "y", Fetch "x",Tru]
--- You should get an exception with the string: "Run-time error"
+-- testParser "x := 5; x := x - 1;" == ("","x=4")
+-- testParser "x := 0 - 2;" == ("","x=-2")
+-- testParser "if (not True and 2 <= 5 = 3 == 4) then x :=1; else y := 2;" == ("","y=2")
+-- testParser "x := 42; if x <= 43 then x := 1; else (x := 33; x := x+1;);" == ("","x=1")
+-- testParser "x := 42; if x <= 43 then x := 1; else x := 33; x := x+1;" == ("","x=2")
+-- testParser "x := 42; if x <= 43 then x := 1; else x := 33; x := x+1; z := x+x;" == ("","x=2,z=4")
+-- testParser "x := 44; if x <= 43 then x := 1; else (x := 33; x := x+1;); y := x*2;" == ("","x=34,y=68")
+-- testParser "x := 42; if x <= 43 then (x := 33; x := x+1;) else x := 1;" == ("","x=34")
+-- testParser "if (1 == 0+1 = 2+1 == 3) then x := 1; else x := 2;" == ("","x=1")
+-- testParser "if (1 == 0+1 = (2+1 == 4)) then x := 1; else x := 2;" == ("","x=2")
+-- testParser "x := 2; y := (x - 3)*(4 + 2*3); z := x +x*(2);" == ("","x=2,y=-10,z=6")
+-- testParser "i := 10; fact := 1; while (not(i == 1)) do (fact := fact * i; i := i - 1;);" == ("","fact=3628800,i=1")
