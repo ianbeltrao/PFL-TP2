@@ -3,6 +3,7 @@
 
 import Data.List (intercalate, sortBy)
 import Data.Ord (comparing)
+import Debug.Trace (trace)
 
 -- Part 1
 
@@ -50,25 +51,29 @@ isInteger _ = False
 
 -- Helper function for arithmetic operations
 arithmeticOp :: (Integer -> Integer -> Integer) -> Stack -> Stack
-arithmeticOp op (Left x:Left y:xs) = Left (op y x):xs
+arithmeticOp op (Left x:Left y:xs) = Left (op x y):xs  -- Corrected the order of x and y
 arithmeticOp _ _ = error "Run-time error"
 
 -- Helper function for boolean comparison operations
 boolOp :: (Integer -> Integer -> Bool) -> Stack -> Stack
-boolOp op (Left x:Left y:xs) = Right (op y x):xs
+boolOp op (Left x:Left y:xs) = Right (op x y):xs
 boolOp _ _ = error "Run-time error"
 
+
 loop :: Code -> Code -> Stack -> Code
-loop c1 c2 stack = case pop stack of
-                     (Right True, xs) -> c1 ++ [Branch (c2 ++ [Loop c1 c2]) [Noop]] 
-                     (Right False, xs) -> []
-                     _ -> error "Run-time error"
+loop c1 c2 stack = 
+    case stack of
+        (Right b:xs) -> if b 
+                        then c1 ++ [Loop c1 c2] 
+                        else []
+        _ -> error "Run-time error: Invalid stack state in Loop"
+
 
 
 run :: (Code, Stack, State) -> (Code, Stack, State)
 run ([], stack, state) = ([], stack, state)
 run ((inst:rest), stack, state) =
-  case inst of
+    case inst of
     Push n -> run (rest, Left n : stack, state)
     Add    -> run (rest, arithmeticOp (+) stack, state)
     Mult   -> run (rest, arithmeticOp (*) stack, state)
@@ -76,9 +81,9 @@ run ((inst:rest), stack, state) =
     Tru    -> run (rest, Right True : stack, state)
     Fals   -> run (rest, Right False : stack, state)
     Equ    -> case stack of
-                (Left x:Left y:xs)  -> run (rest, Right (x == y) : xs, state)
-                (Right x:Right y:xs) -> run (rest, Right (x == y) : xs, state)
-                _ -> error "Run-time error"
+            (Left x:Left y:xs)  -> run (rest, Right (x == y) : xs, state)
+            (Right x:Right y:xs) -> run (rest, Right (x == y) : xs, state)
+            _ -> error "Run-time error: Stack underflow in Equ"
     Le     -> run (rest, boolOp (<=) stack, state)
     And    -> case pop stack of
                 (Right x, Right y:xs) -> run (rest, Right (x && y) : xs, state)
@@ -92,13 +97,22 @@ run ((inst:rest), stack, state) =
     Store var -> case pop stack of
                     (val, xs) -> run (rest, xs, (var, val) : filter ((/= var) . fst) state)
     Noop -> run (rest, stack, state)
-    Branch c1 c2 -> case pop stack of
-                    (Right True, xs) -> run (c1 ++ rest, xs, state)
-                    (Right False, xs) -> run (c2 ++ rest, xs, state)
-                    _ -> error "Run-time error"
-    Loop c1 c2 -> run (loop c1 c2 stack ++ rest, stack, state)    
+    Branch c1 c2 -> 
+        case stack of
+            (Right True : xs) -> run (c1 ++ rest, xs, state)
+            (Right False : xs) -> run (c2 ++ rest, xs, state)
+            _ -> error "Run-time error: Invalid condition in Branch"
+    Loop c1 c2 -> 
+        case stack of
+            (Right b : xs) -> 
+                if b 
+                then run (c1 ++ [Loop c1 c2] ++ rest, xs, state)
+                else run (rest, xs, state)
+            _ -> error $ "Run-time error: Invalid condition in Loop, stack: " ++ show stack
 
+-- Updated pop function with proper error handling
 pop :: Stack -> (StackItem, Stack)
+pop [] = error "Run-time error: Empty stack"
 pop (x:xs) = (x, xs)
 
 -- To help you test your assembler
