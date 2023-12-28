@@ -102,13 +102,8 @@ run ((inst:rest), stack, state) =
             (Right True : xs) -> run (c1 ++ rest, xs, state)
             (Right False : xs) -> run (c2 ++ rest, xs, state)
             _ -> error "Run-time error: Invalid condition in Branch"
-    Loop c1 c2 -> 
-        case stack of
-            (Right b : xs) -> 
-                if b 
-                then run (c1 ++ [Loop c1 c2] ++ rest, xs, state)
-                else run (rest, xs, state)
-            _ -> error $ "Run-time error: Invalid condition in Loop, stack: " ++ show stack
+    Loop c1 c2 -> run (c1 ++ [Branch (c2 ++ [Loop c1 c2]) [Noop]] ++ rest, stack, state)
+
 
 -- Updated pop function with proper error handling
 pop :: Stack -> (StackItem, Stack)
@@ -123,16 +118,16 @@ testAssembler code = (stack2Str stack, state2Str state)
 main :: IO ()
 main = do
   -- Example test case
-  print $ testAssembler [Push 10,Push 4,Push 3,Sub,Mult] == ("-10","")
-  print $ testAssembler [Fals,Push 3,Tru,Store "var",Store "a", Store "someVar"] == ("","a=3,someVar=False,var=True")
-  print $ testAssembler [Fals,Store "var",Fetch "var"] == ("False","var=False")
-  print $ testAssembler [Push (-20),Tru,Fals] == ("False,True,-20","")
-  print $ testAssembler [Push (-20),Tru,Tru,Neg] == ("False,True,-20","")
-  print $ testAssembler [Push (-20),Tru,Tru,Neg,Equ] == ("False,-20","")
-  print $ testAssembler [Push (-20),Push (-21), Le] == ("True","")
-  print $ testAssembler [Push 5,Store "x",Push 1,Fetch "x",Sub,Store "x"] == ("","x=4")
-  print $ testAssembler [Push 10,Store "i",Push 1,Store "fact",Loop [Push 1,Fetch "i",Equ,Neg] [Fetch "i",Fetch "fact",Mult,Store "fact",Push 1,Fetch "i",Sub,Store "i"]] == ("","fact=3628800,i=1")
-
+  print $ testAssembler [Push 10, Push 4, Push 3, Sub, Mult] == ("-10","")
+  print $ testAssembler [Fals, Push 3, Tru, Store "var", Store "a", Store "someVar"] == ("","a=3,someVar=False,var=True")
+  print $ testAssembler [Fals, Store "var", Fetch "var"] == ("False","var=False")
+  print $ testAssembler [Push (-20), Tru, Fals] == ("False,True,-20","")
+  print $ testAssembler [Push (-20), Tru, Tru, Neg] == ("False,True,-20","")
+  print $ testAssembler [Push (-20), Tru, Tru, Neg, Equ] == ("False,-20","")
+  print $ testAssembler [Push (-20), Push (-21), Le] == ("True","")
+  print $ testAssembler [Push 5, Store "x", Push 1, Fetch "x", Sub, Store "x"] == ("","x=4")
+  print $ testAssembler [Push 10, Store "i", Push 1, Store "fact", Loop [Push 1, Fetch "i", Equ, Neg] [Fetch "i", Fetch "fact", Mult, Store "fact", Push 1, Fetch "i", Sub, Store "i"]] == ("","fact=3628800,i=1")
+  print $ testAssembler [Tru,Tru,Store "y", Fetch "x",Tru] 
 -- Examples:
 -- -- testAssembler [Push 10,Push 4,Push 3,Sub,Mult] == ("-10","")
 -- testAssembler [Fals,Push 3,Tru,Store "var",Store "a", Store "someVar"] == ("","a=3,someVar=False,var=True")
