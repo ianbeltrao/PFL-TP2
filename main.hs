@@ -52,14 +52,23 @@ isInteger _ = False
 
 -- Helper function for arithmetic operations
 arithmeticOp :: (Integer -> Integer -> Integer) -> Stack -> Stack
-arithmeticOp op (Left x:Left y:xs) = Left (op y x) : xs  -- Swapped x and y
-arithmeticOp _ _ = error "Run-time error: Invalid stack for arithmetic operation"
+arithmeticOp op stack = 
+    --trace ("arithmeticOp: " ++ show stack) $
+    case stack of
+        Left x:Left y:xs -> Left (op x y) : xs  -- Using original order x and y
+        _ -> error "Run-time error: Invalid stack for arithmetic operation"
+
+
 
 
 -- Helper function for boolean comparison operations
 boolOp :: (Integer -> Integer -> Bool) -> Stack -> Stack
-boolOp op (Left x:Left y:xs) = Right (op x y):xs
-boolOp _ _ = error "Run-time error"
+boolOp op stack = 
+    --trace ("boolOp: " ++ show stack) $
+    case stack of
+        Left x:Left y:xs -> Right (op x y):xs
+        _ -> error "Run-time error"
+
 
 
 loop :: Code -> Code -> Stack -> Code
@@ -73,8 +82,11 @@ loop c1 c2 stack =
 
 
 run :: (Code, Stack, State) -> (Code, Stack, State)
-run ([], stack, state) = ([], stack, state)
-run (inst:rest, stack, state) =
+run args@([], stack, state) = 
+ --   trace ("run: " ++ show args :: String) $
+    ([], stack, state)
+run args@(inst:rest, stack, state) =
+    --trace ("run: " ++ show args :: String) $
     case inst of
     Push n -> run (rest, Left n : stack, state)
     Add    -> run (rest, arithmeticOp (+) stack, state)
@@ -114,8 +126,11 @@ pop (x:xs) = (x, xs)
 
 -- To help you test your assembler
 testAssembler :: Code -> (String, String)
-testAssembler code = (stack2Str stack, state2Str state)
+testAssembler code =
+    let result = (stack2Str stack, state2Str state)
+    in trace ("testAssembler result: " ++ show result) result
   where (_, stack, state) = run(code, createEmptyStack, createEmptyState)
+
 
 -- PFL 2023/24 - Haskell practical assignment Part 2
 -- Updated on 15/12/2023
@@ -140,7 +155,7 @@ compA a = {- trace ("compA: " ++ show a) $ -} case a of
     Const n -> [Push n]
     Var x -> [Fetch x]
     AddExp a1 a2 -> compA a1 ++ compA a2 ++ [Add]
-    SubExp a1 a2 -> compA a1 ++ compA a2 ++ [Sub]
+    SubExp a1 a2 -> compA a2 ++ compA a1 ++ [Sub]
     MultExp a1 a2 -> compA a1 ++ compA a2 ++ [Mult]
 
 -- compB :: Bexp -> Code
@@ -337,6 +352,16 @@ testParser programCode =
 
 main :: IO ()
 main = do
+  print $ testAssembler [Push 10, Push 4, Push 3, Sub, Mult] == ("-10","")
+  print $ testAssembler [Fals, Push 3, Tru, Store "var", Store "a", Store "someVar"] == ("","a=3,someVar=False,var=True")
+  print $ testAssembler [Fals, Store "var", Fetch "var"] == ("False","var=False")
+  print $ testAssembler [Push (-20), Tru, Fals] == ("False,True,-20","")
+  print $ testAssembler [Push (-20), Tru, Tru, Neg] == ("False,True,-20","")
+  print $ testAssembler [Push (-20), Tru, Tru, Neg, Equ] == ("False,-20","")
+  print $ testAssembler [Push (-20), Push (-21), Le] == ("True","")
+  print $ testAssembler [Push 5, Store "x", Push 1, Fetch "x", Sub, Store "x"] == ("","x=4")
+  print $ testAssembler [Push 10, Store "i", Push 1, Store "fact", Loop [Push 1, Fetch "i", Equ, Neg] [Fetch "i", Fetch "fact", Mult, Store "fact", Push 1, Fetch "i", Sub, Store "i"]] == ("","fact=3628800,i=1")
+  --print $ testAssembler [Tru,Tru,Store "y", Fetch "x",Tru]
   print $ testParser "x := 5; x := x - 1;" == ("","x=4")
   print $ testParser "x := 0 - 2;" == ("","x=-2")
   print $ testParser "if (not True and 2 <= 5 = 3 == 4) then x :=1; else y := 2;" == ("","y=2")
