@@ -27,7 +27,7 @@ createEmptyStack = []
 -- stack2Str :: Stack -> String
 stackItemToStr :: StackItem -> String
 stackItemToStr (Left n) = show n
-stackItemToStr (Right b) = if b then "True" else "False"
+stackItemToStr (Right b) = show b
 
 stack2Str :: Stack -> String
 stack2Str = intercalate "," . map stackItemToStr
@@ -63,10 +63,10 @@ boolOp _ _ = error "Run-time error"
 
 
 loop :: Code -> Code -> Stack -> Code
-loop c1 c2 stack = 
+loop c1 c2 stack =
     case stack of
-        (Right b:xs) -> if b 
-                        then c1 ++ [Loop c1 c2] 
+        (Right b:xs) -> if b
+                        then c1 ++ [Loop c1 c2]
                         else []
         _ -> error "Run-time error: Invalid stack state in Loop"
 
@@ -75,7 +75,6 @@ loop c1 c2 stack =
 run :: (Code, Stack, State) -> (Code, Stack, State)
 run ([], stack, state) = ([], stack, state)
 run (inst:rest, stack, state) =
-    trace ("run: " ++ show inst ++ ", stack: " ++ show stack ++ ", state: " ++ show state) $
     case inst of
     Push n -> run (rest, Left n : stack, state)
     Add    -> run (rest, arithmeticOp (+) stack, state)
@@ -100,13 +99,12 @@ run (inst:rest, stack, state) =
     Store var -> case pop stack of
                     (val, xs) -> run (rest, xs, (var, val) : filter ((/= var) . fst) state)
     Noop -> run (rest, stack, state)
-    Branch c1 c2 -> 
+    Branch c1 c2 ->
         case stack of
             (Right True : xs) -> run (c1 ++ rest, xs, state)
             (Right False : xs) -> run (c2 ++ rest, xs, state)
             _ -> error "Run-time error: Invalid condition in Branch"
-    Loop c1 c2 -> trace ("Looping with c1: " ++ show c1 ++ ", c2: " ++ show c2) $  -- Add this line for logging
-                 run (c1 ++ [Branch (c2 ++ [Loop c1 c2]) [Noop]] ++ rest, stack, state)
+    Loop c1 c2 -> run (c1 ++ [Branch (c2 ++ [Loop c1 c2]) [Noop]] ++ rest, stack, state)
 
 
 -- Updated pop function with proper error handling
@@ -130,8 +128,9 @@ testAssembler code = (stack2Str stack, state2Str state)
 data Aexp = Const Integer | Var String | AddExp Aexp Aexp | SubExp Aexp Aexp | MultExp Aexp Aexp
           deriving Show
 
-data Bexp = TrueConst | FalseConst | EqualExp Aexp Aexp | LessEqExp Aexp Aexp | NotExp Bexp | AndExp Bexp Bexp
+data Bexp = TrueConst | FalseConst | EqualExpA Aexp Aexp | EqualExpB Bexp Bexp | LessEqExp Aexp Aexp | NotExp Bexp | AndExp Bexp Bexp
           deriving Show
+
 data Stm = Assign String Aexp | Sequence [Stm] | If Bexp Stm Stm | While Bexp Stm
          deriving Show
 
@@ -149,10 +148,12 @@ compB :: Bexp -> Code
 compB b = {- trace ("compB: " ++ show b) $ -} case b of
     TrueConst -> [Tru]
     FalseConst -> [Fals]
-    EqualExp a1 a2 -> compA a1 ++ compA a2 ++ [Equ]
-    LessEqExp a1 a2 -> compA a1 ++ compA a2 ++ [Le]
-    NotExp b -> compB b ++ [Neg]
+    EqualExpA a1 a2 -> compA a1 ++ compA a2 ++ [Equ]
+    EqualExpB b1 b2 -> compB b1 ++ compB b2 ++ [Equ]
+    LessEqExp a1 a2 -> compA a2 ++ compA a1 ++ [Le]
     AndExp b1 b2 -> compB b1 ++ compB b2 ++ [And]
+    NotExp b -> compB b ++ [Neg]
+
 
 -- compile :: Program -> Code
 compile :: [Stm] -> Code
@@ -163,15 +164,18 @@ compile stms = {- trace ("compile: " ++ show stms) $ -} case stms of
     compileStm s = {- trace ("compileStm: " ++ show s) $ -} case s of
         Assign x a -> compA a ++ [Store x]
         Sequence stmList -> concatMap compileStm stmList
-        If b t f -> compB b ++ [Branch (compile [t]) (compile [f])]
-        While b body -> let loopBody = compile [body] ++ compB b
-                        in [Loop loopBody [Noop]]
+        If b t f -> compB b ++ [Branch (compileStm t) (compileStm f)]
+        While b body -> [Loop (compB b) (compileStm body)]
+
 
 -- Lexer and Parser Implementation
 lexer :: String -> [String]
 lexer str = {- trace ("lexer: " ++ str) $ -}
     case str of
         [] -> []
+        ('=':'=':cs) -> "==" : lexer cs
+        ('<':'=':cs) -> "<=" : lexer cs
+        (':':'=':cs) -> ":=" : lexer cs
         (c:cs)
             | isSpace c -> lexer cs
             | isDigit c -> let (numToken, restNum) = span isDigit (c:cs) in numToken : lexer restNum
@@ -183,7 +187,7 @@ parse str = {- trace ("parse: " ++ str) $ -} parseStms (lexer str)
 
 -- Parser for Arithmetic Expressions
 parseAexp :: [String] -> (Aexp, [String])
-parseAexp tokens = trace ("parseAexp: " ++ show tokens) $
+parseAexp tokens =
     let (term, rest) = parseTerm tokens
     in case rest of
         ("+":rest') -> let (aexp, rest'') = parseAexp rest' in (AddExp term aexp, rest'')
@@ -192,7 +196,7 @@ parseAexp tokens = trace ("parseAexp: " ++ show tokens) $
 
 -- Parser for Terms in Arithmetic Expressions
 parseTerm :: [String] -> (Aexp, [String])
-parseTerm tokens = trace ("parseTerm: " ++ show tokens) $
+parseTerm tokens =
     let (factor, rest) = parseFactor tokens
     in case rest of
         ("*":rest') -> let (term, rest'') = parseTerm rest' in (MultExp factor term, rest'')
@@ -200,80 +204,123 @@ parseTerm tokens = trace ("parseTerm: " ++ show tokens) $
 
 -- Parser for Factors in Arithmetic Expressions
 parseFactor :: [String] -> (Aexp, [String])
-parseFactor tokens = trace ("parseFactor: " ++ show tokens) $
+parseFactor tokens =
     case tokens of
-        "(" : rest -> 
-            let (aexp, rest') = parseAexp rest
-            in case span (/= ")") rest' of
-                (_, ")" : rest'') -> (aexp, rest'')
-                _ -> error "Parse error: Expected ')' after expression"
+        "(" : rest ->
+            case parseAexp rest of
+                (aexp, ")":newRest) -> (aexp, newRest)
+                _ -> error "parseFactor erro. close parentheses"
         t : rest
             | all isDigit t -> (Const (read t), rest)
             | otherwise -> (Var t, rest)
+        _ -> error "parseFactor error."
+
+
+parseBexp :: [String] -> (Bexp, [String])
+parseBexp tokens =
+    let (term, rest) = parseEuality tokens
+    in case rest of
+        ("and":rest') -> let (aexp, rest'') = parseBexp rest' in (AndExp term aexp, rest'')
+        _ -> (term, rest)
+
+
+parseEuality :: [String] -> (Bexp, [String])
+parseEuality tokens =
+    let (term, rest) = parseNot tokens
+    in case rest of
+        ("=":rest') -> let (aexp, rest'') = parseEuality rest' in (EqualExpB term aexp, rest'')
+        _ -> (term, rest)
 
 
 -- Parser for Boolean Expressions
-parseBexp :: [String] -> (Bexp, [String])
-parseBexp tokens = trace ("parseBexp: " ++ show tokens) $
+parseNot :: [String] -> (Bexp, [String])
+parseNot tokens =
     case tokens of
-        ("not":rest) -> let (bexp, rest') = parseBexp rest in (NotExp bexp, rest')
-        _ -> let (relation, rest) = parseRelation tokens
-             in case rest of
-                 ("and":rest') -> let (bexp, rest'') = parseBexp rest' in (AndExp relation bexp, rest'')
-                 _ -> (relation, rest)
+        ("not":rest) -> let (bexp, rest') = parseNot rest in (NotExp bexp, rest')
+        rest -> let (bexp, rest') = parseRelation rest in (bexp, rest')
 
--- Parser for Relations in Boolean Expressions
+
 parseRelation :: [String] -> (Bexp, [String])
-parseRelation tokens = trace ("parseRelation: " ++ show tokens) $
-    let (a1, op:rest) = parseAexp tokens
-        (a2, rest') = parseAexp rest
-    in case op of
-        "<=" -> (LessEqExp a1 a2, rest')
-        "==" -> (EqualExp a1 a2, rest')
-        "=" -> let (b1, rest'') = parseBexp rest'
-                   b1Val = case b1 of TrueConst -> 1; _ -> 0
-               in (EqualExp (Const b1Val) a2, rest'')
-        _ -> error "Parse error in parseRelation"
+
+parseRelation ("(" : rest) =
+    case parseBexp rest of
+        (exp, ")":restTokens2) -> (exp, restTokens2)
+        _ -> error "parse"
+
+parseRelation tokens =
+    case parseAexp tokens of
+        (Var "True", rest) -> (TrueConst, rest)
+        (Var "False", rest) -> (FalseConst, rest)
+        _ -> let (a1, op:rest) = parseAexp tokens
+                 (a2, rest') = parseAexp rest
+             in case op of
+                "<=" -> (LessEqExp a1 a2, rest')
+                "==" -> (EqualExpA a1 a2, rest')
+                _ -> error "Parse error"
+
 
 -- Parser for Statements
 parseStm :: [String] -> (Stm, [String])
-parseStm tokens = trace ("parseStm: " ++ show tokens) $
+parseStm tokens =
     case tokens of
-        ("if":rest) -> 
+        ("if":rest) ->
             let (bexp, "then":restThen) = parseBexp rest
-                (thenStm, "else":restElse) = parseStm restThen
-                (elseStm, rest'') = parseStm restElse
+
+                (thenStm, "else":restElse) = if head restThen /= "("
+                                               then parseStm restThen
+                                             else
+                                                let tokens_stms = takeWhile (/=")") (tail restThen)
+                                                    stms = parseStms tokens_stms
+                                                in (Sequence stms, tail $ dropWhile (/= ")") restThen)
+
+                (elseStm, rest'') = if head restElse /= "("
+                                      then parseStm restElse
+                                    else
+                                        let tokens_stms = takeWhile (/=")") (tail restElse)
+                                            stms = parseStms tokens_stms
+                                        in (Sequence stms, drop 2 $ dropWhile (/= ")") restElse)
+
             in (If bexp thenStm elseStm, rest'')
-        
-        ("while":rest) -> 
+
+        ("while":rest) ->
             let (bexp, "do":restDo) = parseBexp rest
-                (body, rest') = parseStm restDo
+
+
+                (body, rest') = if head restDo /= "("
+                                      then parseStm restDo
+                                    else
+                                        let tokens_stms = takeWhile (/=")") (tail restDo)
+                                            stms = parseStms tokens_stms
+                                        in (Sequence stms, drop 2 $ dropWhile (/= ")") restDo)
+
             in (While bexp body, rest')
 
         (var:":=":rest) ->
             let (aexp, ";":rest') = parseAexp rest
             in (Assign var aexp, rest')
 
-        _ -> 
+        _ ->
             let (stm, rest') = parseSimpleStm tokens
             in case rest' of
                 ";":rest'' -> let (stm', rest''') = parseStm rest'' in (Sequence [stm, stm'], rest''')
                 _ -> (stm, rest')
 
+
 -- Parser for Simple Statements (no control structures)
 parseSimpleStm :: [String] -> (Stm, [String])
-parseSimpleStm tokens = trace ("parseSimpleStm: " ++ show tokens) $
+parseSimpleStm tokens =
     case tokens of
-        var:":":"=":rest -> 
+        var:":=":rest ->
             let (aexp, rest') = parseAexp rest
             in case rest' of
                 ";":rest'' -> (Assign var aexp, rest'')
                 _ -> error "Parse error: Expected ';' after assignment"
         _ -> error "Parse error: Expected assignment statement"
 
+
 -- Parsing a sequence of statements
 parseStms :: [String] -> [Stm]
-parseStms tokens = trace ("parseStms: " ++ show tokens) $
+parseStms tokens =
     case tokens of
         [] -> []
         _ -> let (stm, rest) = parseStm tokens
@@ -281,17 +328,17 @@ parseStms tokens = trace ("parseStms: " ++ show tokens) $
 
 -- To help you test your parser
 testParser :: String -> (String, String)
-testParser programCode = 
+testParser programCode =
     let result = (stack2Str stack, state2Str state)
     in trace ("testParser result: " ++ show result) result
-  where 
+  where
     (_, stack, state) = run(compile (parse programCode), createEmptyStack, createEmptyState)
 
 
 main :: IO ()
 main = do
-  --print $ testParser "x := 5; x := x - 1;" == ("","x=4")
-  --print $ testParser "x := 0 - 2;" == ("","x=-2")
+  print $ testParser "x := 5; x := x - 1;" == ("","x=4")
+  print $ testParser "x := 0 - 2;" == ("","x=-2")
   print $ testParser "if (not True and 2 <= 5 = 3 == 4) then x :=1; else y := 2;" == ("","y=2")
   print $ testParser "x := 42; if x <= 43 then x := 1; else (x := 33; x := x+1;);" == ("","x=1")
   print $ testParser "x := 42; if x <= 43 then x := 1; else x := 33; x := x+1;" == ("","x=2")
@@ -302,18 +349,3 @@ main = do
   print $ testParser "if (1 == 0+1 = (2+1 == 4)) then x := 1; else x := 2;" == ("","x=2")
   print $ testParser "x := 2; y := (x - 3)*(4 + 2*3); z := x +x*(2);" == ("","x=2,y=-10,z=6")
   print $ testParser "i := 10; fact := 1; while (not(i == 1)) do (fact := fact * i; i := i - 1;);" == ("","fact=3628800,i=1")
-
-
--- Examples:
--- testParser "x := 5; x := x - 1;" == ("","x=4")
--- testParser "x := 0 - 2;" == ("","x=-2")
--- testParser "if (not True and 2 <= 5 = 3 == 4) then x :=1; else y := 2;" == ("","y=2")
--- testParser "x := 42; if x <= 43 then x := 1; else (x := 33; x := x+1;);" == ("","x=1")
--- testParser "x := 42; if x <= 43 then x := 1; else x := 33; x := x+1;" == ("","x=2")
--- testParser "x := 42; if x <= 43 then x := 1; else x := 33; x := x+1; z := x+x;" == ("","x=2,z=4")
--- testParser "x := 44; if x <= 43 then x := 1; else (x := 33; x := x+1;); y := x*2;" == ("","x=34,y=68")
--- testParser "x := 42; if x <= 43 then (x := 33; x := x+1;) else x := 1;" == ("","x=34")
--- testParser "if (1 == 0+1 = 2+1 == 3) then x := 1; else x := 2;" == ("","x=1")
--- testParser "if (1 == 0+1 = (2+1 == 4)) then x := 1; else x := 2;" == ("","x=2")
--- testParser "x := 2; y := (x - 3)*(4 + 2*3); z := x +x*(2);" == ("","x=2,y=-10,z=6")
--- testParser "i := 10; fact := 1; while (not(i == 1)) do (fact := fact * i; i := i - 1;);" == ("","fact=3628800,i=1")
